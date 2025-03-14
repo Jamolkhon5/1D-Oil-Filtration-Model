@@ -39,6 +39,11 @@ class OilFiltrationModel:
         self.Sw_with_cap[:, 0] = 0.8
         self.Sw_without_cap[:, 0] = 0.8
 
+        # Параметры для модели капиллярного давления Брукса-Кори
+        self.entry_pressure = 1.0  # давление входа, МПа
+        self.pore_distribution_index = 1.5  # индекс распределения пор (λ)
+        self.wettability_factor = 0.6  # коэффициент смачиваемости (1 - гидрофильная, 0 - гидрофобная)
+
     def relative_permeability_water(self, Sw):
         """Относительная проницаемость для воды"""
         Swc = self.initial_water_saturation
@@ -75,17 +80,45 @@ class OilFiltrationModel:
         return M / (1 + M)
 
     def capillary_pressure(self, Sw):
-        """Функция капиллярного давления"""
+        """
+        Функция капиллярного давления по модели Брукса-Кори с плавным переходом
+        в граничных зонах для повышения численной стабильности.
+        """
+        # Параметры Брукса-Кори (добавить как атрибуты класса в __init__)
+        # self.entry_pressure = 0.3  # давление входа, МПа
+        # self.pore_distribution_index = 2.0  # индекс распределения пор
+        # self.wettability_factor = 0.8  # коэффициент смачиваемости (0-1)
+
+        # Граничные значения насыщенности
         Swc = self.initial_water_saturation
         Sor = self.residual_oil_saturation
 
-        if Sw <= Swc:
-            return 0.5  # МПа
-        elif Sw >= 1 - Sor:
-            return 0.0
+        # Избегаем численных проблем у границ диапазона насыщенности
+        epsilon = 0.01  # параметр сглаживания вблизи границ
+
+        if Sw <= Swc + epsilon:
+            # Плавный переход к максимальному капиллярному давлению
+            alpha = (Sw - Swc) / epsilon
+            max_pc = self.entry_pressure * 3.0  # максимальное капиллярное давление, МПа
+            return max_pc * (1.0 - alpha) + self.entry_pressure * alpha
+
+        elif Sw >= 1 - Sor - epsilon:
+            # Плавный переход к нулю капиллярного давления
+            alpha = (1 - Sor - Sw) / epsilon
+            return self.entry_pressure * 0.05 * alpha  # близко к нулю в конечной точке
+
         else:
-            Swn = (Sw - Swc) / (1 - Swc - Sor)
-            return 0.5 * ((1 - Swn) ** 2) / (Swn ** 2 + 1e-10)  # МПа
+            # Нормализованная водонасыщенность (эффективная)
+            Se = (Sw - Swc) / (1 - Swc - Sor)
+
+            # Модель Брукса-Кори
+            pc = self.entry_pressure * (Se ** (-1.0 / self.pore_distribution_index))
+
+            # Корректировка с учетом смачиваемости
+            # Для гидрофобной среды (oil-wet) увеличиваем капиллярное давление
+            pc = pc * (2.0 - self.wettability_factor)
+
+            return pc
 
     def diffusion_coefficient(self, Sw):
         """Коэффициент капиллярной диффузии"""
@@ -97,29 +130,27 @@ class OilFiltrationModel:
         Sw_minus = max(Sw - delta, 0.01)
         Sw_plus = min(Sw + delta, 0.99)
 
-        # Используем центральную разностную схему для аппроксимации производных
         df_dS = (self.fractional_flow(Sw_plus) - self.fractional_flow(Sw_minus)) / (2 * delta)
 
         # Вычисление производной капиллярного давления
         dpc_dS = (self.capillary_pressure(Sw_plus) - self.capillary_pressure(Sw_minus)) / (2 * delta)
 
-        # Коэффициент проницаемости (Дарси, м²)
-        k = 0.1  # уменьшаем значение для стабильности
+        # Увеличиваем коэффициент проницаемости для усиления эффекта
+        k = 1.0  # изменить с 0.1 на 1.0
 
-        # Средняя вязкость флюида (мПа·с)
         mu = max(self.mu_water * Sw + self.mu_oil * (1 - Sw), 0.1)
 
-        # Коэффициент диффузии с учетом теоретической формулы
+        # Теоретическая формула с БОЛЬШИМ усилением
         D = -k / (self.porosity * mu) * df_dS * dpc_dS
 
-        # Ограничиваем значения для обеспечения устойчивости
-        max_diffusion = 0.45 * self.dx ** 2 / self.dt  # из условия устойчивости
+        # Увеличиваем множитель с 0.05 до 1.0 для усиления эффекта
+        max_diffusion = 0.45 * self.dx ** 2 / self.dt
 
-        # Сглаживаем отрицательные значения и ограничиваем максимум
+        # Обрабатываем отрицательные значения и применяем ограничение устойчивости
         if D < 0:
-            return min(abs(D) * 0.05, max_diffusion)
+            return min(abs(D) * 1.0, max_diffusion)  # изменить множитель с 0.05 на 1.0
         else:
-            return min(D * 0.05, max_diffusion)
+            return min(D * 1.0, max_diffusion)  # изменить множитель с 0.05 на 1.0
 
     def run_simulation(self):
         """Запуск моделирования"""

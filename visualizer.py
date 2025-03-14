@@ -123,3 +123,223 @@ class Visualizer:
         self.plot_recovery_factor()
         self.plot_saturation_evolution()
         self.plot_pressure_profiles()
+
+        # Новые графики
+        self.plot_3d_saturation_surface()
+        self.plot_saturation_difference()
+        self.plot_filtration_velocities()
+        self.calculate_capillary_number()
+
+        # Примеры анализа чувствительности
+        self.plot_sensitivity_analysis('entry_pressure', [0.5, 1.0, 1.5, 2.0])
+        self.plot_sensitivity_analysis('wettability_factor', [0.2, 0.4, 0.6, 0.8])
+
+    def plot_3d_saturation_surface(self):
+        """Построение 3D поверхности водонасыщенности во времени и пространстве"""
+        from mpl_toolkits.mplot3d import Axes3D
+
+        fig = plt.figure(figsize=(14, 10))
+
+        # Создаем оси для двух графиков
+        ax1 = fig.add_subplot(211, projection='3d')
+        ax2 = fig.add_subplot(212, projection='3d')
+
+        # Создаем сетку для X и T
+        X, T = np.meshgrid(self.model.x, self.model.t)
+
+        # Строим 3D поверхность для модели без капиллярных эффектов
+        surf1 = ax1.plot_surface(X, T, self.model.Sw_without_cap,
+                                 cmap='viridis', edgecolor='none', alpha=0.8)
+        ax1.set_xlabel('Расстояние (м)')
+        ax1.set_ylabel('Время (дни)')
+        ax1.set_zlabel('Водонасыщенность')
+        ax1.set_title('3D-поверхность водонасыщенности без учета капиллярных эффектов')
+        fig.colorbar(surf1, ax=ax1, shrink=0.5, aspect=5)
+
+        # Строим 3D поверхность для модели с капиллярными эффектами
+        surf2 = ax2.plot_surface(X, T, self.model.Sw_with_cap,
+                                 cmap='viridis', edgecolor='none', alpha=0.8)
+        ax2.set_xlabel('Расстояние (м)')
+        ax2.set_ylabel('Время (дни)')
+        ax2.set_zlabel('Водонасыщенность')
+        ax2.set_title('3D-поверхность водонасыщенности с учетом капиллярных эффектов')
+        fig.colorbar(surf2, ax=ax2, shrink=0.5, aspect=5)
+
+        # Устанавливаем одинаковые углы обзора для обоих графиков
+        ax1.view_init(elev=30, azim=45)
+        ax2.view_init(elev=30, azim=45)
+
+        plt.tight_layout()
+        plt.savefig('saturation_3d.png', dpi=300)
+        plt.close()
+
+    def plot_saturation_difference(self):
+        """Визуализация разницы между моделями с учетом и без учета капиллярных эффектов"""
+        # Вычисляем разницу между насыщенностями
+        saturation_diff = self.model.Sw_with_cap - self.model.Sw_without_cap
+
+        # Создаем сетку
+        X, T = np.meshgrid(self.model.x, self.model.t)
+
+        plt.figure(figsize=(12, 6))
+
+        # Контурный график разницы
+        contour = plt.contourf(X, T, saturation_diff, levels=20, cmap='coolwarm')
+        plt.colorbar(label='Разница водонасыщенности')
+        plt.xlabel('Расстояние (м)')
+        plt.ylabel('Время (дни)')
+        plt.title('Разница водонасыщенности (с капиллярными эффектами - без капиллярных эффектов)')
+        plt.grid(True)
+
+        plt.tight_layout()
+        plt.savefig('saturation_difference.png')
+        plt.close()
+
+    def plot_sensitivity_analysis(self, param_name, param_values, day=50):
+        """Анализ чувствительности модели к различным параметрам"""
+        plt.figure(figsize=(10, 6))
+
+        # Словарь с русскими названиями параметров и их единицами измерения
+        param_names_ru = {
+            'entry_pressure': 'Капиллярное давление вытеснения',
+            'wettability_factor': 'Коэффициент смачиваемости породы',
+            'pore_distribution_index': 'Индекс распределения пор',
+            'porosity': 'Коэффициент пористости',
+            'mu_oil': 'Вязкость нефти',
+            'mu_water': 'Вязкость воды'
+        }
+
+        # Словарь с единицами измерения
+        param_units = {
+            'entry_pressure': 'МПа',
+            'wettability_factor': 'отн. ед.',
+            'pore_distribution_index': 'отн. ед.',
+            'porosity': 'д. ед.',
+            'mu_oil': 'мПа·с',
+            'mu_water': 'мПа·с'
+        }
+
+        # Получаем русское название параметра
+        param_name_ru = param_names_ru.get(param_name, param_name)
+        param_unit = param_units.get(param_name, '')
+
+        # Сохраняем оригинальное значение параметра
+        original_value = getattr(self.model, param_name)
+        recoveries = []
+        breakthrough_times = []
+
+        # Расчет для разных значений параметра
+        time_index = int(day / self.model.dt)
+        for value in param_values:
+            # Устанавливаем новое значение параметра
+            setattr(self.model, param_name, value)
+            # Пересчитываем модель
+            self.model.run_simulation()
+            # Получаем коэффициент нефтеотдачи
+            recovery_with_cap, _ = self.model.calculate_recovery_factor()
+            recoveries.append(recovery_with_cap[time_index])
+            # Получаем время прорыва
+            breakthrough_time, _ = self.model.get_breakthrough_time()
+            breakthrough_times.append(breakthrough_time)
+
+        # Возвращаем оригинальное значение параметра
+        setattr(self.model, param_name, original_value)
+        self.model.run_simulation()
+
+        # Создаем два подграфика
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+
+        # График коэффициента нефтеотдачи
+        ax1.plot(param_values, recoveries, 'o-', color='#1f77b4', linewidth=2)
+        ax1.set_xlabel(f'{param_name_ru} [{param_unit}]')
+        ax1.set_ylabel(f'Коэффициент нефтеотдачи на {day}-й день, д. ед.')
+        ax1.set_title(f'Влияние параметра "{param_name_ru}" на нефтеотдачу')
+        ax1.grid(True, linestyle='--', alpha=0.7)
+
+        # График времени прорыва
+        ax2.plot(param_values, breakthrough_times, 'o-', color='#ff7f0e', linewidth=2)
+        ax2.set_xlabel(f'{param_name_ru} [{param_unit}]')
+        ax2.set_ylabel('Время прорыва воды, дни')
+        ax2.set_title(f'Влияние параметра "{param_name_ru}" на время прорыва')
+        ax2.grid(True, linestyle='--', alpha=0.7)
+
+        # Добавление значений на графики
+        for i, (x, y) in enumerate(zip(param_values, recoveries)):
+            ax1.annotate(f'{y:.3f}', (x, y), textcoords="offset points",
+                         xytext=(0, 10), ha='center', fontsize=9)
+
+        for i, (x, y) in enumerate(zip(param_values, breakthrough_times)):
+            ax2.annotate(f'{y:.1f}', (x, y), textcoords="offset points",
+                         xytext=(0, 10), ha='center', fontsize=9)
+
+        plt.tight_layout()
+        plt.savefig(f'sensitivity_{param_name}.png', dpi=300)
+        plt.close()
+
+    def plot_filtration_velocities(self, day=50):
+        """Графики распределения скоростей фильтрации"""
+        time_index = int(day / self.model.dt)
+
+        plt.figure(figsize=(10, 6))
+
+        # Расчет скоростей (упрощенно)
+        v_without_cap = np.zeros(self.model.nx)
+        v_with_cap = np.zeros(self.model.nx)
+
+        # Расчет скорости из функции Баклея-Леверетта
+        for i in range(self.model.nx):
+            v_without_cap[i] = self.model.fractional_flow(self.model.Sw_without_cap[time_index, i])
+            v_with_cap[i] = self.model.fractional_flow(self.model.Sw_with_cap[time_index, i])
+
+        # Строим график
+        plt.plot(self.model.x[:-1], v_without_cap, label='Без капиллярных эффектов')
+        plt.plot(self.model.x[:-1], v_with_cap, label='С капиллярными эффектами')
+
+        plt.xlabel('Расстояние (м)')
+        plt.ylabel('Скорость фильтрации (м/день)')
+        plt.title(f'Распределение скоростей фильтрации на {day}-й день')
+        plt.grid(True)
+        plt.legend()
+
+        plt.tight_layout()
+        plt.savefig('filtration_velocities.png')
+        plt.close()
+
+    def calculate_capillary_number(self):
+        """Расчет и визуализация капиллярного числа"""
+        # Создаем массив для капиллярного числа
+        capillary_number = np.zeros((self.model.nt, self.model.nx))
+
+        # Рассчитываем для каждой точки и времени
+        for n in range(self.model.nt):
+            for i in range(1, self.model.nx):
+                # Скорость фильтрации (упрощенно)
+                v = self.model.fractional_flow(self.model.Sw_with_cap[n, i])
+
+                # Капиллярное давление
+                pc = self.model.capillary_pressure(self.model.Sw_with_cap[n, i])
+
+                # Вязкость (упрощенно)
+                mu = self.model.mu_water * self.model.Sw_with_cap[n, i] + \
+                     self.model.mu_oil * (1 - self.model.Sw_with_cap[n, i])
+
+                # Капиллярное число (отношение вязких сил к капиллярным)
+                if pc > 0:
+                    capillary_number[n, i] = mu * v / pc
+                else:
+                    capillary_number[n, i] = 0
+
+        # Визуализация среднего капиллярного числа по времени
+        plt.figure(figsize=(10, 6))
+
+        avg_capillary_number = np.mean(capillary_number, axis=1)
+        plt.plot(self.model.t, avg_capillary_number)
+
+        plt.xlabel('Время (дни)')
+        plt.ylabel('Среднее капиллярное число')
+        plt.title('Изменение среднего капиллярного числа во времени')
+        plt.grid(True)
+
+        plt.tight_layout()
+        plt.savefig('capillary_number.png')
+        plt.close()
